@@ -74,6 +74,7 @@ export async function runReplyAgent(params: {
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  // 1) Unpack params and initialize active session state.
   const {
     commandBody,
     followupRun,
@@ -105,6 +106,7 @@ export async function runReplyAgent(params: {
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
 
+  // 2) Configure typing signals + tool output gating.
   const isHeartbeat = opts?.isHeartbeat === true;
   const typingSignals = createTypingSignaler({
     typing,
@@ -123,6 +125,7 @@ export async function runReplyAgent(params: {
     resolvedVerboseLevel,
   });
 
+  // 3) Prepare block streaming pipeline and reply routing mode.
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
 
@@ -158,6 +161,7 @@ export async function runReplyAgent(params: {
         })
       : null;
 
+  // 4) If streaming + steer mode, push into embedded queue and return.
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
@@ -178,6 +182,7 @@ export async function runReplyAgent(params: {
     }
   }
 
+  // 5) If an active run exists, enqueue followup and return.
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     if (activeSessionEntry && activeSessionStore && sessionKey) {
@@ -196,6 +201,7 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
+  // 6) Signal run start and perform memory flush if needed.
   await typingSignals.signalRunStart();
 
   activeSessionEntry = await runMemoryFlushIfNeeded({
@@ -213,6 +219,7 @@ export async function runReplyAgent(params: {
     isHeartbeat,
   });
 
+  // 7) Prepare followup runner for queued turns.
   const runFollowupTurn = createFollowupRunner({
     opts,
     typing,
@@ -231,14 +238,17 @@ export async function runReplyAgent(params: {
     buildLogMessage: (nextSessionId: string) => string;
     cleanupTranscripts?: boolean;
   };
+  // 8) Helper: reset session on compaction/order failures.
   const resetSession = async ({
     failureLabel,
     buildLogMessage,
     cleanupTranscripts,
   }: SessionResetOptions): Promise<boolean> => {
+    // 8.1) Validate prerequisites (need session + store).
     if (!sessionKey || !activeSessionStore || !storePath) return false;
     const prevEntry = activeSessionStore[sessionKey] ?? activeSessionEntry;
     if (!prevEntry) return false;
+    // 8.2) Create a new session id and reset key state.
     const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
     const nextSessionId = crypto.randomUUID();
     const nextEntry: SessionEntry = {
@@ -248,6 +258,7 @@ export async function runReplyAgent(params: {
       systemSent: false,
       abortedLastRun: false,
     };
+    // 8.3) Resolve and persist new transcript path for the session.
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const nextSessionFile = resolveSessionTranscriptPath(
       nextSessionId,
@@ -265,11 +276,13 @@ export async function runReplyAgent(params: {
         `Failed to persist session reset after ${failureLabel} (${sessionKey}): ${String(err)}`,
       );
     }
+    // 8.4) Update active run state to use the new session.
     followupRun.run.sessionId = nextSessionId;
     followupRun.run.sessionFile = nextSessionFile;
     activeSessionEntry = nextEntry;
     activeIsNewSession = true;
     defaultRuntime.error(buildLogMessage(nextSessionId));
+    // 8.5) Optionally clean up old transcript files.
     if (cleanupTranscripts && prevSessionId) {
       const transcriptCandidates = new Set<string>();
       const resolved = resolveSessionFilePath(prevSessionId, prevEntry, { agentId });

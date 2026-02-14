@@ -78,6 +78,7 @@ export async function dispatchReplyFromConfig(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof getReplyFromConfig;
 }): Promise<DispatchFromConfigResult> {
+  // 1) Initialize diagnostics + core identifiers.
   const { ctx, cfg, dispatcher } = params;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
@@ -126,14 +127,17 @@ export async function dispatchReplyFromConfig(params: {
     });
   };
 
+  // 2) Short-circuit duplicate inbound messages.
   if (shouldSkipDuplicateInbound(ctx)) {
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
+  // 3) Compute inbound media flags + session-level TTS mode.
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
   const hookRunner = getGlobalHookRunner();
+  // 4) Fire message_received hooks (non-blocking).
   if (hookRunner?.hasHooks("message_received")) {
     const timestamp =
       typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
@@ -183,7 +187,7 @@ export async function dispatchReplyFromConfig(params: {
       });
   }
 
-  // Check if we should route replies to originating channel instead of dispatcher.
+  // 5) Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
   // This handles cross-provider routing (e.g., message from Telegram being processed
   // by a shared session that's currently on Slack) while preserving normal dispatcher
@@ -228,9 +232,11 @@ export async function dispatchReplyFromConfig(params: {
     }
   };
 
+  // 6) Mark the session as processing for diagnostics.
   markProcessing();
 
   try {
+    // 7) Fast abort path (stop command) without running the agent.
     const fastAbort = await tryFastAbortFromMessage({ ctx, cfg });
     if (fastAbort.handled) {
       const payload = {
@@ -266,16 +272,18 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal, counts };
     }
 
-    // Track accumulated block text for TTS generation after streaming completes.
+    // 8) Track accumulated block text for TTS generation after streaming completes.
     // When block streaming succeeds, there's no final reply, so we need to generate
     // TTS audio separately from the accumulated block content.
     let accumulatedBlockText = "";
     let blockCount = 0;
 
+    // 9) Run the core reply resolver (agent + tools pipeline).
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
         ...params.replyOptions,
+        // 10) Stream tool results (with optional TTS and routing).
         onToolResult:
           ctx.ChatType !== "group" && ctx.CommandSource !== "native"
             ? (payload: ReplyPayload) => {
@@ -297,6 +305,7 @@ export async function dispatchReplyFromConfig(params: {
                 return run();
               }
             : undefined,
+        // 11) Stream block replies (with optional TTS and routing).
         onBlockReply: (payload: ReplyPayload, context) => {
           const run = async () => {
             // Accumulate block text for TTS generation after streaming
@@ -327,10 +336,12 @@ export async function dispatchReplyFromConfig(params: {
       cfg,
     );
 
+    // 12) Normalize replies to an array for uniform handling.
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
 
     let queuedFinal = false;
     let routedFinalCount = 0;
+    // 13) Deliver final replies (apply TTS and routing if needed).
     for (const reply of replies) {
       const ttsReply = await maybeApplyTtsToPayload({
         payload: reply,
@@ -363,6 +374,7 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
+    // 14) Optional TTS-only reply when block streaming produced no final reply.
     const ttsMode = resolveTtsConfig(cfg).mode ?? "final";
     // Generate TTS-only reply after block streaming completes (when there's no final reply).
     // This handles the case where block streaming succeeds and drops final payloads,
@@ -418,6 +430,7 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
+    // 15) Wait for dispatcher to finish sending and finalize diagnostics.
     await dispatcher.waitForIdle();
 
     const counts = dispatcher.getQueuedCounts();

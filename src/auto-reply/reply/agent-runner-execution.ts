@@ -78,11 +78,13 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
+  // 1) Initialize run tracking and state.
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
+  // 2) Create runId and register agent run context for diagnostics.
   const runId = params.opts?.runId ?? crypto.randomUUID();
   params.opts?.onAgentRunStart?.(runId);
   if (params.sessionKey) {
@@ -97,8 +99,10 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackModel = params.followupRun.run.model;
   let didResetAfterCompactionFailure = false;
 
+  // 3) Run loop with model fallback + recovery paths.
   while (true) {
     try {
+      // 3.1) Configure streaming behavior and helpers.
       const allowPartialStream = !(
         params.followupRun.run.reasoningLevel === "stream" && params.opts?.onReasoningStream
       );
@@ -134,6 +138,7 @@ export async function runAgentTurnWithFallback(params: {
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
+      // 3.2) Execute the agent run (with provider/model fallback).
       const fallbackResult = await runWithModelFallback({
         cfg: params.followupRun.run.config,
         provider: params.followupRun.run.provider,
@@ -143,6 +148,7 @@ export async function runAgentTurnWithFallback(params: {
           params.followupRun.run.config,
           resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
         ),
+        // 3.3) Per-fallback run: choose CLI or embedded agent path.
         run: (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
@@ -152,6 +158,7 @@ export async function runAgentTurnWithFallback(params: {
             thinkLevel: params.followupRun.run.thinkLevel,
           });
 
+          // 3.4) CLI provider execution path.
           if (isCliProvider(provider, params.followupRun.run.config)) {
             const startedAt = Date.now();
             emitAgentEvent({
@@ -221,6 +228,7 @@ export async function runAgentTurnWithFallback(params: {
             provider === params.followupRun.run.provider
               ? params.followupRun.run.authProfileId
               : undefined;
+          // 3.5) Embedded agent execution path.
           return runEmbeddedPiAgent({
             sessionId: params.followupRun.run.sessionId,
             sessionKey: params.sessionKey,
@@ -276,6 +284,7 @@ export async function runAgentTurnWithFallback(params: {
             abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
+            // 3.6) Streaming + tool/block hooks wired into typing + reply pipeline.
             onPartialReply: allowPartialStream
               ? async (payload) => {
                   const textForTyping = await handlePartialForTyping(payload);
@@ -422,6 +431,7 @@ export async function runAgentTurnWithFallback(params: {
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
 
+      // 3.7) Recover from embedded error payloads (overflow / role ordering).
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
       const embeddedError = runResult.meta?.error;
@@ -451,8 +461,10 @@ export async function runAgentTurnWithFallback(params: {
         }
       }
 
+      // 3.8) Exit retry loop on success.
       break;
     } catch (err) {
+      // 3.9) Handle thrown errors (overflow/compaction/corruption) and recover.
       const message = err instanceof Error ? err.message : String(err);
       const isContextOverflow = isLikelyContextOverflowError(message);
       const isCompactionFailure = isCompactionFailureError(message);
@@ -484,7 +496,7 @@ export async function runAgentTurnWithFallback(params: {
         }
       }
 
-      // Auto-recover from Gemini session corruption by resetting the session
+      // 3.10) Auto-recover from session corruption by resetting the session.
       if (
         isSessionCorruption &&
         params.sessionKey &&
@@ -537,6 +549,7 @@ export async function runAgentTurnWithFallback(params: {
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
           : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
+      // 3.11) Fallback error response when recovery isn't possible.
       return {
         kind: "final",
         payload: {
@@ -546,6 +559,7 @@ export async function runAgentTurnWithFallback(params: {
     }
   }
 
+  // 4) Success path return.
   return {
     kind: "success",
     runResult,

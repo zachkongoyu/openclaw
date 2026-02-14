@@ -29,6 +29,7 @@ export async function getReplyFromConfig(
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  // 1) Load config + resolve session/agent/model defaults.
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const cfg = configOverride ?? loadConfig();
   const targetSessionKey =
@@ -46,6 +47,7 @@ export async function getReplyFromConfig(
   });
   let provider = defaultProvider;
   let model = defaultModel;
+  // 2) Override model for heartbeat runs if configured.
   if (opts?.isHeartbeat) {
     const heartbeatRaw = agentCfg?.heartbeat?.model?.trim() ?? "";
     const heartbeatRef = heartbeatRaw
@@ -61,6 +63,7 @@ export async function getReplyFromConfig(
     }
   }
 
+  // 3) Prepare agent workspace (bootstrap files if needed).
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
@@ -69,6 +72,7 @@ export async function getReplyFromConfig(
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg });
+  // 4) Configure typing controller.
   const configuredTypingSeconds =
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
@@ -81,8 +85,10 @@ export async function getReplyFromConfig(
   });
   opts?.onTypingController?.(typing);
 
+  // 5) Finalize inbound context (normalize text, flags, etc).
   const finalized = finalizeInboundContext(ctx);
 
+  // 6) Apply media + link understanding (unless fast test env).
   if (!isFastTestEnv) {
     await applyMediaUnderstanding({
       ctx: finalized,
@@ -96,6 +102,7 @@ export async function getReplyFromConfig(
     });
   }
 
+  // 7) Resolve command authorization and session state.
   const commandAuthorized = finalized.CommandAuthorized;
   resolveCommandAuthorization({
     ctx: finalized,
@@ -126,6 +133,7 @@ export async function getReplyFromConfig(
     bodyStripped,
   } = sessionState;
 
+  // 8) Apply reset/model override rules.
   await applyResetModelOverride({
     cfg,
     resetTriggered,
@@ -141,6 +149,7 @@ export async function getReplyFromConfig(
     aliasIndex,
   });
 
+  // 9) Resolve directives + per-message settings (model, tools, queue, etc).
   const directiveResult = await resolveReplyDirectives({
     ctx: finalized,
     cfg,
@@ -167,6 +176,7 @@ export async function getReplyFromConfig(
     opts,
     skillFilter: opts?.skillFilter,
   });
+  // 10) If directives returned an immediate reply, return it now.
   if (directiveResult.kind === "reply") {
     return directiveResult.reply;
   }
@@ -202,6 +212,7 @@ export async function getReplyFromConfig(
   provider = resolvedProvider;
   model = resolvedModel;
 
+  // 11) Apply inline actions (commands that may short-circuit or adjust directives).
   const inlineActionResult = await handleInlineActions({
     ctx,
     sessionCtx,
@@ -240,12 +251,14 @@ export async function getReplyFromConfig(
     abortedLastRun,
     skillFilter: opts?.skillFilter,
   });
+  // 12) Inline action may return an immediate reply.
   if (inlineActionResult.kind === "reply") {
     return inlineActionResult.reply;
   }
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
+  // 13) Stage media into the sandbox workspace if needed.
   await stageSandboxMedia({
     ctx,
     sessionCtx,
@@ -254,6 +267,7 @@ export async function getReplyFromConfig(
     workspaceDir,
   });
 
+  // 14) Run the prepared agent turn and return reply payloads.
   return runPreparedReply({
     ctx,
     sessionCtx,

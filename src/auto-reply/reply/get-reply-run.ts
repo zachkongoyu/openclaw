@@ -107,6 +107,7 @@ type RunPreparedReplyParams = {
 export async function runPreparedReply(
   params: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  // 1) Unpack params and establish base session state.
   const {
     ctx,
     sessionCtx,
@@ -156,6 +157,7 @@ export async function runPreparedReply(
   } = params;
   let currentSystemSent = systemSent;
 
+  // 2) Resolve chat/session context (group, heartbeat, typing mode).
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
@@ -166,6 +168,7 @@ export async function runPreparedReply(
     wasMentioned,
     isHeartbeat,
   });
+  // 3) Build group intro/system prompt additions if needed.
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
@@ -180,6 +183,7 @@ export async function runPreparedReply(
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
   const extraSystemPrompt = [groupIntro, groupSystemPrompt].filter(Boolean).join("\n\n");
+  // 4) Resolve inbound body and handle control-command gating.
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
@@ -193,12 +197,14 @@ export async function runPreparedReply(
     typing.cleanup();
     return undefined;
   }
+  // 5) Handle bare /new or /reset prompts.
   const isBareNewOrReset = rawBodyTrimmed === "/new" || rawBodyTrimmed === "/reset";
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
   const baseBodyFinal = isBareSessionReset ? BARE_SESSION_RESET_PROMPT : baseBody;
   const baseBodyTrimmed = baseBodyFinal.trim();
+  // 6) Guard against empty input after normalization.
   if (!baseBodyTrimmed) {
     await typing.onReplyStart();
     logVerbose("Inbound body empty after normalization; skipping agent run");
@@ -207,6 +213,7 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
+  // 7) Apply session hints and prepend system events if needed.
   let prefixedBodyBase = await applySessionHints({
     baseBody: baseBodyFinal,
     abortedLastRun,
@@ -226,11 +233,13 @@ export async function runPreparedReply(
     isNewSession,
     prefixedBodyBase,
   });
+  // 8) Inject thread starter context (new thread only).
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadStarterNote =
     isNewSession && threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
+  // 9) Ensure skill snapshot and update session state.
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,
@@ -246,6 +255,7 @@ export async function runPreparedReply(
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
   const prefixedBody = [threadStarterNote, prefixedBodyBase].filter(Boolean).join("\n\n");
+  // 10) Build media notes + reply hints for agent prompt.
   const mediaNote = buildInboundMediaNote(ctx);
   const mediaReplyHint = mediaNote
     ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:/path or MEDIA:https://example.com/image.jpg (spaces ok, quote if needed). Keep caption in the text body."
@@ -253,6 +263,7 @@ export async function runPreparedReply(
   let prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
+  // 11) Resolve per-message think level (explicit or default).
   if (!resolvedThinkLevel && prefixedCommandBody) {
     const parts = prefixedCommandBody.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
@@ -264,6 +275,7 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
+  // 12) Enforce model limits on xhigh thinking.
   if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
@@ -284,6 +296,7 @@ export async function runPreparedReply(
       }
     }
   }
+  // 13) Emit reset confirmation (when authorized) via route-reply.
   if (resetTriggered && command.isAuthorizedSender) {
     const channel = ctx.OriginatingChannel || (command.channel as any);
     const to = ctx.OriginatingTo || command.from || command.to;
@@ -305,6 +318,7 @@ export async function runPreparedReply(
       });
     }
   }
+  // 14) Resolve session file + queue settings + optional interrupt.
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
   const queueBodyBase = [threadStarterNote, baseBodyFinal].filter(Boolean).join("\n\n");
@@ -338,6 +352,7 @@ export async function runPreparedReply(
     resolvedQueue.mode === "followup" ||
     resolvedQueue.mode === "collect" ||
     resolvedQueue.mode === "steer-backlog";
+  // 15) Resolve auth profile overrides for provider/model access.
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg,
     provider,
@@ -349,6 +364,7 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+  // 16) Build followup run payload (agent meta + routing context).
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
@@ -400,6 +416,7 @@ export async function runPreparedReply(
     },
   };
 
+  // 17) Execute the agent run and return reply payloads.
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,

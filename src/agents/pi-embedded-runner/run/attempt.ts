@@ -138,6 +138,7 @@ export function injectHistoryImagesIntoMessages(
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  // 1) Resolve workspace + sandbox context and prepare directories.
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
@@ -161,6 +162,7 @@ export async function runEmbeddedAttempt(
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
 
+  // 2) Load skills (snapshot or workspace) and build skills prompt.
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
   try {
@@ -185,6 +187,7 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
     });
 
+    // 3) Resolve bootstrap/context files and workspace notes.
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
       await resolveBootstrapContextForRun({
@@ -202,6 +205,7 @@ export async function runEmbeddedAttempt(
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
+    // 4) Build tools (coding + channel tools), sanitize if needed.
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
     const toolsRaw = params.disableTools
@@ -241,6 +245,7 @@ export async function runEmbeddedAttempt(
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
 
+    // 5) Resolve runtime channel capabilities + reaction guidance.
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
@@ -286,6 +291,7 @@ export async function runEmbeddedAttempt(
             return undefined;
           })()
         : undefined;
+    // 6) Resolve agent ids + system prompt inputs.
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
@@ -339,6 +345,7 @@ export async function runEmbeddedAttempt(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
 
+    // 7) Build system prompt + report.
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
@@ -389,6 +396,7 @@ export async function runEmbeddedAttempt(
     });
     const systemPrompt = createSystemPromptOverride(appendPrompt);
 
+    // 8) Acquire session write lock + open session manager.
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
     });
@@ -423,6 +431,7 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
       });
 
+      // 9) Prepare settings, extensions, and tool lists.
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
       ensurePiCompactionReserveTokens({
         settingsManager,
@@ -463,6 +472,7 @@ export async function runEmbeddedAttempt(
       });
       await resourceLoader.reload();
 
+      // 10) Create agent session and configure stream/loggers.
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
@@ -527,6 +537,7 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // 11) Sanitize/validate/limit history before prompting.
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -558,6 +569,7 @@ export async function runEmbeddedAttempt(
         throw err;
       }
 
+      // 12) Set up abort/timeout handling and subscriptions.
       let aborted = Boolean(params.abortSignal?.aborted);
       let timedOut = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
@@ -638,6 +650,7 @@ export async function runEmbeddedAttempt(
         getLastToolError,
       } = subscription;
 
+      // 13) Register run handle + timeout watcher.
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
           await activeSession.steer(text);
@@ -689,6 +702,7 @@ export async function runEmbeddedAttempt(
         }
       }
 
+      // 14) Run hooks, execute prompt, and gather results.
       // Get hook runner once for both before_agent_start and agent_end hooks
       const hookRunner = getGlobalHookRunner();
 
@@ -852,6 +866,7 @@ export async function runEmbeddedAttempt(
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
+      // 15) Return attempt summary (assistant text, tool metadata, errors).
       const lastAssistant = messagesSnapshot
         .slice()
         .reverse()
@@ -891,6 +906,7 @@ export async function runEmbeddedAttempt(
       await sessionLock.release();
     }
   } finally {
+    // 16) Restore env + cwd.
     restoreSkillEnv?.();
     process.chdir(prevCwd);
   }

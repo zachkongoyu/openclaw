@@ -70,12 +70,14 @@ function scrubAnthropicRefusalMagic(prompt: string): string {
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
+  // 1) Resolve execution lanes (session + global) and enqueue work.
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   const enqueueSession =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(sessionLane, task, opts));
+  // 2) Resolve tool result format and session type flags.
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??
@@ -88,6 +90,7 @@ export async function runEmbeddedPiAgent(
 
   return enqueueSession(() =>
     enqueueGlobal(async () => {
+      // 3) Establish run context (cwd/workspace) + provider/model selection.
       const started = Date.now();
       const resolvedWorkspace = resolveUserPath(params.workspaceDir);
       const prevCwd = process.cwd();
@@ -109,6 +112,7 @@ export async function runEmbeddedPiAgent(
         throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
       }
 
+      // 4) Validate context window limits for the selected model.
       const ctxInfo = resolveContextWindowInfo({
         cfg: params.config,
         provider,
@@ -136,6 +140,7 @@ export async function runEmbeddedPiAgent(
         );
       }
 
+      // 5) Resolve auth profiles and acquire API key (with failover logic).
       const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
       const preferredProfileId = params.authProfileId?.trim();
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
@@ -292,6 +297,7 @@ export async function runEmbeddedPiAgent(
         }
       }
 
+      // 6) Attempt run loop (includes compaction + thinking-level fallbacks).
       let overflowCompactionAttempted = false;
       try {
         while (true) {
@@ -301,6 +307,7 @@ export async function runEmbeddedPiAgent(
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
 
+          // 7) Execute the embedded attempt (model/tool streaming happens inside).
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -358,6 +365,7 @@ export async function runEmbeddedPiAgent(
 
           const { aborted, promptError, timedOut, sessionIdUsed, lastAssistant } = attempt;
 
+          // 8) Handle prompt errors (overflow/role-ordering/image/auth/failover).
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
             if (isContextOverflowError(errorText)) {
@@ -511,6 +519,7 @@ export async function runEmbeddedPiAgent(
             throw promptError;
           }
 
+          // 9) Handle assistant-side failures (auth/rate-limit/format/think-level).
           const fallbackThinking = pickFallbackThinkingLevel({
             message: lastAssistant?.errorMessage,
             attempted: attemptedThinking,
@@ -610,6 +619,7 @@ export async function runEmbeddedPiAgent(
             }
           }
 
+          // 10) Build payloads + metadata and mark auth profile health.
           const usage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
@@ -672,6 +682,7 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
+        // 11) Always restore cwd.
         process.chdir(prevCwd);
       }
     }),
