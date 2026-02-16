@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
 import {
   consumeRestartSentinel,
+  formatRestartSentinelMessage,
   readRestartSentinel,
   resolveRestartSentinelPath,
   trimLogTail,
@@ -22,8 +22,11 @@ describe("restart sentinel", () => {
   });
 
   afterEach(async () => {
-    if (prevStateDir) process.env.OPENCLAW_STATE_DIR = prevStateDir;
-    else delete process.env.OPENCLAW_STATE_DIR;
+    if (prevStateDir) {
+      process.env.OPENCLAW_STATE_DIR = prevStateDir;
+    } else {
+      delete process.env.OPENCLAW_STATE_DIR;
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -57,6 +60,40 @@ describe("restart sentinel", () => {
     expect(read).toBeNull();
 
     await expect(fs.stat(filePath)).rejects.toThrow();
+  });
+
+  it("formatRestartSentinelMessage uses custom message when present", () => {
+    const payload = {
+      kind: "config-apply" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message: "Config updated successfully",
+    };
+    expect(formatRestartSentinelMessage(payload)).toBe("Config updated successfully");
+  });
+
+  it("formatRestartSentinelMessage falls back to summary when no message", () => {
+    const payload = {
+      kind: "update" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      stats: { mode: "git" },
+    };
+    const result = formatRestartSentinelMessage(payload);
+    expect(result).toContain("Gateway restart");
+    expect(result).toContain("update");
+    expect(result).toContain("ok");
+  });
+
+  it("formatRestartSentinelMessage falls back to summary for blank message", () => {
+    const payload = {
+      kind: "restart" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message: "   ",
+    };
+    const result = formatRestartSentinelMessage(payload);
+    expect(result).toContain("Gateway restart");
   });
 
   it("trims log tails", () => {

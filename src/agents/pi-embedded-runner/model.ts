@@ -1,14 +1,17 @@
-import { join } from "node:path";
-
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeModelCompat } from "../model-compat.js";
+import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
+import {
+  discoverAuthStorage,
+  discoverModels,
+  type AuthStorage,
+  type ModelRegistry,
+} from "../pi-model-discovery.js";
 
 type InlineModelEntry = ModelDefinitionConfig & { provider: string; baseUrl?: string };
 type InlineProviderConfig = {
@@ -22,7 +25,9 @@ export function buildInlineProviderModels(
 ): InlineModelEntry[] {
   return Object.entries(providers).flatMap(([providerId, entry]) => {
     const trimmed = providerId.trim();
-    if (!trimmed) return [];
+    if (!trimmed) {
+      return [];
+    }
     return (entry?.models ?? []).map((model) => ({
       ...model,
       provider: trimmed,
@@ -37,13 +42,17 @@ export function buildModelAliasLines(cfg?: OpenClawConfig) {
   const entries: Array<{ alias: string; model: string }> = [];
   for (const [keyRaw, entryRaw] of Object.entries(models)) {
     const model = String(keyRaw ?? "").trim();
-    if (!model) continue;
+    if (!model) {
+      continue;
+    }
     const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) continue;
+    if (!alias) {
+      continue;
+    }
     entries.push({ alias, model });
   }
   return entries
-    .sort((a, b) => a.alias.localeCompare(b.alias))
+    .toSorted((a, b) => a.alias.localeCompare(b.alias))
     .map((entry) => `- ${entry.alias}: ${entry.model}`);
 }
 
@@ -59,8 +68,8 @@ export function resolveModel(
   modelRegistry: ModelRegistry;
 } {
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const authStorage = new AuthStorage(join(resolvedAgentDir, "auth.json"));
-  const modelRegistry = new ModelRegistry(authStorage, join(resolvedAgentDir, "models.json"));
+  const authStorage = discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
   if (!model) {
     const providers = cfg?.models?.providers ?? {};
@@ -76,6 +85,12 @@ export function resolveModel(
         authStorage,
         modelRegistry,
       };
+    }
+    // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
+    // Otherwise, configured providers can default to a generic API and break specific transports.
+    const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
+    if (forwardCompat) {
+      return { model: forwardCompat, authStorage, modelRegistry };
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {

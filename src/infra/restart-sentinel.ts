@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 
@@ -29,7 +28,7 @@ export type RestartSentinelStats = {
 };
 
 export type RestartSentinelPayload = {
-  kind: "config-apply" | "update" | "restart";
+  kind: "config-apply" | "config-patch" | "update" | "restart";
   status: "ok" | "error" | "skipped";
   ts: number;
   sessionKey?: string;
@@ -102,13 +101,18 @@ export async function consumeRestartSentinel(
 ): Promise<RestartSentinel | null> {
   const filePath = resolveRestartSentinelPath(env);
   const parsed = await readRestartSentinel(env);
-  if (!parsed) return null;
+  if (!parsed) {
+    return null;
+  }
   await fs.unlink(filePath).catch(() => {});
   return parsed;
 }
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
-  return `GatewayRestart:\n${JSON.stringify(payload, null, 2)}`;
+  if (payload.message?.trim()) {
+    return payload.message.trim();
+  }
+  return summarizeRestartSentinel(payload);
 }
 
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
@@ -119,8 +123,12 @@ export function summarizeRestartSentinel(payload: RestartSentinelPayload): strin
 }
 
 export function trimLogTail(input?: string | null, maxChars = 8000) {
-  if (!input) return null;
+  if (!input) {
+    return null;
+  }
   const text = input.trimEnd();
-  if (text.length <= maxChars) return text;
+  if (text.length <= maxChars) {
+    return text;
+  }
   return `…${text.slice(text.length - maxChars)}`;
 }

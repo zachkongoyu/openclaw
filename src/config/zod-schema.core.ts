@@ -1,6 +1,6 @@
 import { z } from "zod";
-
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 export const ModelApiSchema = z.union([
   z.literal("openai-completions"),
@@ -9,6 +9,7 @@ export const ModelApiSchema = z.union([
   z.literal("google-generative-ai"),
   z.literal("github-copilot"),
   z.literal("bedrock-converse-stream"),
+  z.literal("ollama"),
 ]);
 
 export const ModelCompatSchema = z
@@ -16,9 +17,16 @@ export const ModelCompatSchema = z
     supportsStore: z.boolean().optional(),
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
+    supportsUsageInStreaming: z.boolean().optional(),
+    supportsStrictMode: z.boolean().optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
+    thinkingFormat: z.union([z.literal("openai"), z.literal("zai"), z.literal("qwen")]).optional(),
+    requiresToolResultName: z.boolean().optional(),
+    requiresAssistantAfterToolResult: z.boolean().optional(),
+    requiresThinkingAsText: z.boolean().optional(),
+    requiresMistralToolIds: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -49,7 +57,7 @@ export const ModelDefinitionSchema = z
 export const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
-    apiKey: z.string().optional(),
+    apiKey: z.string().optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
@@ -181,7 +189,7 @@ export const TtsConfigSchema = z
       .optional(),
     elevenlabs: z
       .object({
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         baseUrl: z.string().optional(),
         voiceId: z.string().optional(),
         modelId: z.string().optional(),
@@ -203,7 +211,7 @@ export const TtsConfigSchema = z
       .optional(),
     openai: z
       .object({
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         model: z.string().optional(),
         voice: z.string().optional(),
       })
@@ -279,9 +287,13 @@ export const requireOpenAllowFrom = (params: {
   path: Array<string | number>;
   message: string;
 }) => {
-  if (params.policy !== "open") return;
+  if (params.policy !== "open") {
+    return;
+  }
   const allow = normalizeAllowFrom(params.allowFrom);
-  if (allow.includes("*")) return;
+  if (allow.includes("*")) {
+    return;
+  }
   params.ctx.addIssue({
     code: z.ZodIssueCode.custom,
     path: params.path,
@@ -306,6 +318,7 @@ export const QueueModeBySurfaceSchema = z
     whatsapp: QueueModeSchema.optional(),
     telegram: QueueModeSchema.optional(),
     discord: QueueModeSchema.optional(),
+    irc: QueueModeSchema.optional(),
     slack: QueueModeSchema.optional(),
     mattermost: QueueModeSchema.optional(),
     signal: QueueModeSchema.optional(),
@@ -375,7 +388,13 @@ export const MediaUnderstandingScopeSchema = z
               .object({
                 channel: z.string().optional(),
                 chatType: z
-                  .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
+                  .union([
+                    z.literal("direct"),
+                    z.literal("group"),
+                    z.literal("channel"),
+                    /** @deprecated Use `direct` instead. Kept for backward compatibility. */
+                    z.literal("dm"),
+                  ])
                   .optional(),
                 keyPrefix: z.string().optional(),
               })

@@ -11,23 +11,24 @@ let pageState: {
 
 const sessionMocks = vi.hoisted(() => ({
   getPageForTargetId: vi.fn(async () => {
-    if (!currentPage) throw new Error("missing page");
+    if (!currentPage) {
+      throw new Error("missing page");
+    }
     return currentPage;
   }),
   ensurePageState: vi.fn(() => pageState),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   refLocator: vi.fn(() => {
-    if (!currentRefLocator) throw new Error("missing locator");
+    if (!currentRefLocator) {
+      throw new Error("missing locator");
+    }
     return currentRefLocator;
   }),
   rememberRoleRefsForTarget: vi.fn(() => {}),
 }));
 
 vi.mock("./pw-session.js", () => sessionMocks);
-
-async function importModule() {
-  return await import("./pw-tools-core.js");
-}
+const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
   beforeEach(() => {
@@ -39,7 +40,9 @@ describe("pw-tools-core", () => {
       armIdDialog: 0,
       armIdDownload: 0,
     };
-    for (const fn of Object.values(sessionMocks)) fn.mockClear();
+    for (const fn of Object.values(sessionMocks)) {
+      fn.mockClear();
+    }
   });
 
   it("screenshots an element selector", async () => {
@@ -51,7 +54,6 @@ describe("pw-tools-core", () => {
       screenshot: vi.fn(async () => Buffer.from("P")),
     };
 
-    const mod = await importModule();
     const res = await mod.takeScreenshotViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
@@ -72,7 +74,6 @@ describe("pw-tools-core", () => {
       screenshot: vi.fn(async () => Buffer.from("P")),
     };
 
-    const mod = await importModule();
     const res = await mod.takeScreenshotViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
@@ -92,8 +93,6 @@ describe("pw-tools-core", () => {
       })),
       screenshot: vi.fn(async () => Buffer.from("P")),
     };
-
-    const mod = await importModule();
 
     await expect(
       mod.takeScreenshotViaPlaywright({
@@ -121,7 +120,6 @@ describe("pw-tools-core", () => {
       keyboard: { press: vi.fn(async () => {}) },
     };
 
-    const mod = await importModule();
     await mod.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
@@ -145,7 +143,6 @@ describe("pw-tools-core", () => {
       keyboard: { press },
     };
 
-    const mod = await importModule();
     await mod.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       paths: [],

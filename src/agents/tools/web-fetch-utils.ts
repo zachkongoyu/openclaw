@@ -1,5 +1,32 @@
 export type ExtractMode = "markdown" | "text";
 
+let readabilityDepsPromise:
+  | Promise<{
+      Readability: typeof import("@mozilla/readability").Readability;
+      parseHTML: typeof import("linkedom").parseHTML;
+    }>
+  | undefined;
+
+async function loadReadabilityDeps(): Promise<{
+  Readability: typeof import("@mozilla/readability").Readability;
+  parseHTML: typeof import("linkedom").parseHTML;
+}> {
+  if (!readabilityDepsPromise) {
+    readabilityDepsPromise = Promise.all([import("@mozilla/readability"), import("linkedom")]).then(
+      ([readability, linkedom]) => ({
+        Readability: readability.Readability,
+        parseHTML: linkedom.parseHTML,
+      }),
+    );
+  }
+  try {
+    return await readabilityDepsPromise;
+  } catch (error) {
+    readabilityDepsPromise = undefined;
+    throw error;
+  }
+}
+
 function decodeEntities(value: string): string {
   return value
     .replace(/&nbsp;/gi, " ")
@@ -34,7 +61,9 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, "");
   text = text.replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href, body) => {
     const label = normalizeWhitespace(stripTags(body));
-    if (!label) return href;
+    if (!label) {
+      return href;
+    }
     return `[${label}](${href})`;
   });
   text = text.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level, body) => {
@@ -72,7 +101,9 @@ export function truncateText(
   value: string,
   maxChars: number,
 ): { text: string; truncated: boolean } {
-  if (value.length <= maxChars) return { text: value, truncated: false };
+  if (value.length <= maxChars) {
+    return { text: value, truncated: false };
+  }
   return { text: value.slice(0, maxChars), truncated: true };
 }
 
@@ -90,10 +121,7 @@ export async function extractReadableContent(params: {
     return rendered;
   };
   try {
-    const [{ Readability }, { parseHTML }] = await Promise.all([
-      import("@mozilla/readability"),
-      import("linkedom"),
-    ]);
+    const { Readability, parseHTML } = await loadReadabilityDeps();
     const { document } = parseHTML(params.html);
     try {
       (document as { baseURI?: string }).baseURI = params.url;
@@ -102,7 +130,9 @@ export async function extractReadableContent(params: {
     }
     const reader = new Readability(document, { charThreshold: 0 });
     const parsed = reader.parse();
-    if (!parsed?.content) return fallback();
+    if (!parsed?.content) {
+      return fallback();
+    }
     const title = parsed.title || undefined;
     if (params.extractMode === "text") {
       const text = normalizeWhitespace(parsed.textContent ?? "");

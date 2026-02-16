@@ -1,6 +1,5 @@
 import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
-
 import {
   buildPortHints,
   classifyPortListener,
@@ -25,7 +24,10 @@ describe("ports helpers", () => {
       log: vi.fn(),
       exit: vi.fn() as unknown as (code: number) => never,
     };
-    await handlePortError({ code: "EADDRINUSE" }, 1234, "context", runtime).catch(() => {});
+    // Avoid slow OS port inspection; this test only cares about messaging + exit behavior.
+    await handlePortError(new PortInUseError(1234, "details"), 1234, "context", runtime).catch(
+      () => {},
+    );
     expect(runtime.error).toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });

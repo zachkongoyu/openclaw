@@ -1,19 +1,16 @@
-import { isVoiceCompatibleAudio } from "../media/audio.js";
-
-export function isTelegramVoiceCompatible(opts: {
-  contentType?: string | null;
-  fileName?: string | null;
-}): boolean {
-  return isVoiceCompatibleAudio(opts);
-}
+import { isTelegramVoiceCompatibleAudio } from "../media/audio.js";
 
 export function resolveTelegramVoiceDecision(opts: {
   wantsVoice: boolean;
   contentType?: string | null;
   fileName?: string | null;
 }): { useVoice: boolean; reason?: string } {
-  if (!opts.wantsVoice) return { useVoice: false };
-  if (isTelegramVoiceCompatible(opts)) return { useVoice: true };
+  if (!opts.wantsVoice) {
+    return { useVoice: false };
+  }
+  if (isTelegramVoiceCompatibleAudio(opts)) {
+    return { useVoice: true };
+  }
   const contentType = opts.contentType ?? "unknown";
   const fileName = opts.fileName ?? "unknown";
   return {

@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-
 import { runAcpClientInteractive } from "../acp/client.js";
 import { serveAcpGateway } from "../acp/server.js";
 import { defaultRuntime } from "../runtime.js";
@@ -23,9 +22,9 @@ export function registerAcpCli(program: Command) {
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/acp", "docs.openclaw.ai/cli/acp")}\n`,
     )
-    .action((opts) => {
+    .action(async (opts) => {
       try {
-        serveAcpGateway({
+        await serveAcpGateway({
           gatewayUrl: opts.url as string | undefined,
           gatewayToken: opts.token as string | undefined,
           gatewayPassword: opts.password as string | undefined,

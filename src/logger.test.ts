@@ -2,13 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import type { RuntimeEnv } from "./runtime.js";
 import { setVerbose } from "./globals.js";
 import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
 import { DEFAULT_LOG_DIR, resetLogger, setLoggerOverride } from "./logging.js";
-import type { RuntimeEnv } from "./runtime.js";
 
 describe("logger helpers", () => {
   afterEach(() => {
@@ -69,7 +67,7 @@ describe("logger helpers", () => {
 
   it("uses daily rolling default log file and prunes old ones", () => {
     resetLogger();
-    setLoggerOverride({}); // force defaults regardless of user config
+    setLoggerOverride({ level: "info" }); // force default file path with enabled file logging
     const today = localDateString(new Date());
     const todayPath = path.join(DEFAULT_LOG_DIR, `openclaw-${today}.log`);
 

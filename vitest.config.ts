@@ -18,13 +18,14 @@ export default defineConfig({
   test: {
     testTimeout: 120_000,
     hookTimeout: isWindows ? 180_000 : 120_000,
+    // Many suites rely on `vi.stubEnv(...)` and expect it to be scoped to the test.
+    // This is especially important under `pool=vmForks` where env leaks cross-file.
+    unstubEnvs: true,
+    // Same rationale as unstubEnvs: avoid cross-test pollution under vmForks.
+    unstubGlobals: true,
     pool: "forks",
     maxWorkers: isCI ? ciWorkers : localWorkers,
-    include: [
-      "src/**/*.test.ts",
-      "extensions/**/*.test.ts",
-      "test/format-error.test.ts",
-    ],
+    include: ["src/**/*.test.ts", "extensions/**/*.test.ts", "test/format-error.test.ts"],
     setupFiles: ["test/setup.ts"],
     exclude: [
       "dist/**",
